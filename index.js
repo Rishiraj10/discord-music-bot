@@ -32,7 +32,7 @@ if (fs.existsSync(PLAYLIST_FILE)) {
 
 // Load all commands
 const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'));
+const commandFiles = fs.readdirSync(commandsPath).filter(f => f.endsWith('.js') && !f.startsWith('_'));
 const commandsData = [];
 
 for (const file of commandFiles) {
