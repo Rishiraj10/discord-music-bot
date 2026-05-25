@@ -24,7 +24,7 @@ const skip = {
     const count = interaction.options.getInteger('count') ?? 1;
     const track = queue.getCurrentTrack();
     queue.skip(count);
-    await updatePlayerPanel(queue);
+    await updatePlayerPanel(queue, client);
     await interaction.reply({
       embeds: [new EmbedBuilder()
         .setColor(0xFFA500)
@@ -43,7 +43,7 @@ const pause = {
     if (!queue) return;
     if (queue.paused) return interaction.reply({ content: '⏸ Already paused!', ephemeral: true });
     queue.pause();
-    await updatePlayerPanel(queue);
+    await updatePlayerPanel(queue, client);
     await interaction.reply({ embeds: [new EmbedBuilder().setColor(0xFFA500).setDescription('⏸ Paused the music.')] });
   },
 };
@@ -58,7 +58,7 @@ const resume = {
     if (!queue) return;
     if (!queue.paused) return interaction.reply({ content: '▶️ Already playing!', ephemeral: true });
     queue.resume();
-    await updatePlayerPanel(queue);
+    await updatePlayerPanel(queue, client);
     await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('▶️ Resumed the music.')] });
   },
 };
@@ -92,7 +92,7 @@ const volume = {
     if (!queue) return;
     const level = interaction.options.getInteger('level');
     queue.setVolume(level);
-    await updatePlayerPanel(queue);
+    await updatePlayerPanel(queue, client);
     const emoji = level === 0 ? '🔇' : level < 50 ? '🔈' : level < 100 ? '🔉' : '🔊';
     await interaction.reply({
       embeds: [new EmbedBuilder()
@@ -111,7 +111,7 @@ const previous = {
     const queue = getQueue(interaction, client);
     if (!queue) return;
     queue.previous();
-    await updatePlayerPanel(queue);
+    await updatePlayerPanel(queue, client);
     const track = queue.getCurrentTrack();
     await interaction.reply({
       embeds: [new EmbedBuilder()
@@ -141,7 +141,7 @@ const loop = {
     if (!queue) return;
     const mode = interaction.options.getString('mode');
     queue.setLoopMode(mode);
-    await updatePlayerPanel(queue);
+    await updatePlayerPanel(queue, client);
     const labels = { none: '🚫 Loop Off', track: '🔂 Looping current track', queue: '🔁 Looping entire queue' };
     await interaction.reply({
       embeds: [new EmbedBuilder().setColor(0x5865F2).setDescription(`${labels[mode]}`)],
@@ -158,7 +158,7 @@ const shuffle = {
     const queue = getQueue(interaction, client);
     if (!queue) return;
     queue.shuffle();
-    await updatePlayerPanel(queue);
+    await updatePlayerPanel(queue, client);
     await interaction.reply({
       embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('🔀 Queue shuffled!')],
     });
@@ -211,10 +211,18 @@ const join = {
     const { updatePlayerPanel } = require('../utils/playerUI');
     const { queue } = await getOrCreateQueue(interaction);
     if (!queue) return;
+    queue.stay247 = true;
+    queue._clearIdleTimeout();
     await interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription(`✅ Joined **${interaction.member.voice.channel.name}**! Use \`/play\` or the control panel below.`)],
+      embeds: [new EmbedBuilder()
+        .setColor(0x1DB954)
+        .setDescription(
+          `✅ Joined **${interaction.member.voice.channel.name}** in **24/7 mode**.\n` +
+          'The bot stays in voice even when nothing is playing. Use `/play` or the buttons below.\n' +
+          'Use `/leave` to disconnect.'
+        )],
     });
-    await updatePlayerPanel(queue);
+    await updatePlayerPanel(queue, client);
   },
 };
 

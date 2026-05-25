@@ -12,10 +12,12 @@ module.exports = {
       .setDescription('Use **slash commands** or the **🎛️ control panel** (buttons) after `/join` or `/play`.')
       .addFields(
         {
-          name: '🎛️ Control panel buttons',
+          name: '🎛️ MUSIC PANEL buttons',
           value: [
-            '⏮️ Previous · ⏸️ Pause/Resume · ⏭️ Skip · ⏹️ Stop · 🔀 Shuffle',
-            '🔁 Loop · 🔉/🔊 Volume · 📋 Queue · 🧹 Clear · 👋 Leave VC',
+            '**Row 1:** 🔉 Down · ⏮️ Back · ⏸️ Pause · ⏭️ Skip',
+            '**Row 2:** 🔊 Up',
+            '**Row 3:** 🔀 Shuffle · 🔁 Loop · ⏹️ Stop',
+            '**Row 4:** 🔂 AutoPlay · 📋 Playlist (queue list)',
           ].join('\n'),
         },
         {

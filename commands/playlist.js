@@ -1,5 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { savePlaylists, getOrCreateQueue } = require('../utils/helpers');
+const { resolveTracks } = require('../MusicQueue');
+const { updatePlayerPanel } = require('../utils/playerUI');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -85,18 +87,29 @@ module.exports = {
     if (sub === 'addurl') {
       await interaction.deferReply();
       if (!userPlaylists[playlistName]) return interaction.editReply(`❌ Playlist **${playlistName}** not found!`);
+      if (!client.shoukaku) {
+        return interaction.editReply('❌ Lavalink is not configured. Set LAVALINK_* variables on Render.');
+      }
+
       const url = interaction.options.getString('url');
-      const MusicQueue = require('../MusicQueue');
-      const tempQueue = new MusicQueue(interaction.guild.id, interaction.channel, null);
       try {
-        const tracks = await tempQueue.resolveQuery(url, interaction.user.toString());
+        const tracks = await resolveTracks(client.shoukaku, url, interaction.user.toString());
         for (const t of tracks) {
-          userPlaylists[playlistName].push({ title: t.title, url: t.url, duration: t.duration, thumbnail: t.thumbnail });
+          userPlaylists[playlistName].push({
+            title: t.title,
+            url: t.url,
+            duration: t.duration,
+            thumbnail: t.thumbnail,
+            encoded: t.encoded,
+          });
         }
         savePlaylists(client);
+        const preview = tracks.slice(0, 3).map(t => `• ${t.title}`).join('\n');
         return interaction.editReply({
-          embeds: [new EmbedBuilder().setColor(0x1DB954)
-            .setDescription(`✅ Added **${tracks.length}** song(s) to **${playlistName}**`)],
+          embeds: [new EmbedBuilder()
+            .setColor(0x1DB954)
+            .setTitle('✅ Added to Playlist')
+            .setDescription(`Added **${tracks.length}** song(s) to **${playlistName}**${tracks.length <= 3 ? '' : `\n\n${preview}\n…`}`)],
         });
       } catch (e) {
         return interaction.editReply(`❌ Error: ${e.message}`);
@@ -167,6 +180,7 @@ module.exports = {
 
       const tracks = songs.map(s => ({ ...s, requester: interaction.user.toString() }));
       await queue.addTracks(tracks);
+      await updatePlayerPanel(queue, client);
 
       return interaction.editReply({
         embeds: [new EmbedBuilder()

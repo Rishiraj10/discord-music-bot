@@ -71,20 +71,8 @@ async function replyOrEdit(interaction, response) {
 }
 
 function nowPlayingEmbed(track, queue) {
-  const bar = progressBar(0, 1); // Can't get real time from ytdl stream easily
-  return new EmbedBuilder()
-    .setColor(0x1DB954)
-    .setTitle('🎵 Now Playing')
-    .setDescription(`**[${track.title}](${track.url})**`)
-    .setThumbnail(track.thumbnail || null)
-    .addFields(
-      { name: '⏱ Duration', value: track.duration || 'Live', inline: true },
-      { name: '👤 Requested by', value: track.requester, inline: true },
-      { name: '🔊 Volume', value: `${queue.volume}%`, inline: true },
-      { name: '🔁 Loop', value: queue.loopMode === 'none' ? 'Off' : queue.loopMode === 'track' ? '🔂 Track' : '🔁 Queue', inline: true },
-      { name: '📋 Queue', value: `${queue.tracks.length} track(s)`, inline: true },
-    )
-    .setFooter({ text: `Track ${queue.currentIndex + 1} of ${queue.tracks.length} • Use buttons below to control` });
+  const { musicPanelEmbed } = require('./playerUI');
+  return musicPanelEmbed(track, queue, null);
 }
 
 function queueEmbed(queue, page = 1) {
@@ -101,8 +89,9 @@ function queueEmbed(queue, page = 1) {
   });
 
   return new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle(`📋 Queue — ${total} track(s)`)
+    .setColor(0x3b82f6)
+    .setAuthor({ name: 'PLAYLIST / QUEUE' })
+    .setTitle(`${total} track(s)`)
     .setDescription(lines.join('\n') || 'Empty queue')
     .setFooter({ text: `Page ${page}/${pages} • Loop: ${queue.loopMode} • Vol: ${queue.volume}%` });
 }

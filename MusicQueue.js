@@ -6,6 +6,41 @@ const spotifyApi = new SpotifyWebApi({
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
 });
 
+let spotifyTokenPromise = null;
+
+function formatError(e) {
+  if (!e) return 'Unknown error';
+  if (typeof e === 'string') return e;
+  if (e.message && !e.message.includes('[object Object]')) return e.message;
+  const body = e.body;
+  if (typeof body === 'string') return body;
+  if (body?.error?.message) return body.error.message;
+  if (body?.error_description) return body.error_description;
+  if (body?.message) return body.message;
+  try {
+    const raw = JSON.stringify(body ?? e);
+    return raw.length > 180 ? `${raw.slice(0, 180)}…` : raw;
+  } catch {
+    return 'Request failed';
+  }
+}
+
+async function ensureSpotifyToken() {
+  if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
+    throw new Error('Spotify is not configured. Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render.');
+  }
+  if (spotifyApi.getAccessToken()) return;
+  if (!spotifyTokenPromise) {
+    spotifyTokenPromise = spotifyApi.clientCredentialsGrant()
+      .then(data => {
+        spotifyApi.setAccessToken(data.body.access_token);
+        setTimeout(refreshSpotifyToken, (data.body.expires_in - 60) * 1000);
+      })
+      .finally(() => { spotifyTokenPromise = null; });
+  }
+  await spotifyTokenPromise;
+}
+
 async function refreshSpotifyToken() {
   if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) return;
   try {
@@ -13,7 +48,7 @@ async function refreshSpotifyToken() {
     spotifyApi.setAccessToken(data.body['access_token']);
     setTimeout(refreshSpotifyToken, (data.body['expires_in'] - 60) * 1000);
   } catch (e) {
-    console.error('Spotify token error:', e.message);
+    console.error('Spotify token error:', formatError(e));
     setTimeout(refreshSpotifyToken, 60000);
   }
 }
@@ -97,9 +132,15 @@ class MusicQueue {
     this.panelMessage = null;
     this.panelView = 'player';
     this.queuePage = 1;
+    this.stay247 = false;
+    this.autoplay = false;
+    this._lastTrack = null;
   }
 
   _getNode() {
+    if (!this.shoukaku) {
+      throw new Error('Music server (Lavalink) is offline. Check LAVALINK_* env vars on Render.');
+    }
     const node = this.shoukaku.getIdealNode();
     if (!node) throw new Error('Music server (Lavalink) is offline. Check LAVALINK_* env vars on Render.');
     return node;
@@ -159,7 +200,7 @@ class MusicQueue {
   async _updatePanel() {
     try {
       const { updatePlayerPanel } = require('./utils/playerUI');
-      await updatePlayerPanel(this);
+      await updatePlayerPanel(this, this.textChannel?.client);
     } catch {}
   }
 
@@ -176,9 +217,7 @@ class MusicQueue {
   }
 
   async _resolveSpotify(url, requester) {
-    if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
-      throw new Error('Spotify is not configured. Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render.');
-    }
+    await ensureSpotifyToken();
 
     const normalized = normalizeSpotifyUrl(url);
     const tracks = [];
@@ -220,8 +259,7 @@ class MusicQueue {
       }
     } catch (e) {
       if (e.message?.includes('not configured') || e.message?.includes('Unsupported')) throw e;
-      const message = e?.message || e?.body?.error?.message || JSON.stringify(e);
-      throw new Error(`Spotify error: ${message}`);
+      throw new Error(`Spotify error: ${formatError(e)}`);
     }
 
     if (!tracks.length) {
@@ -253,8 +291,7 @@ class MusicQueue {
       if (this.loopMode === 'queue') {
         this.currentIndex = 0;
       } else {
-        this._startIdleTimeout();
-        await this._updatePanel();
+        await this._handleQueueFinished();
         return;
       }
     }
@@ -274,6 +311,7 @@ class MusicQueue {
     if (!this.lavalinkPlayer) throw new Error('Not connected to a voice channel.');
 
     try {
+      this._lastTrack = track;
       await this.lavalinkPlayer.playTrack({
         track: { encoded: track.encoded },
         options: { volume: this.volume },
@@ -300,13 +338,55 @@ class MusicQueue {
           this.currentIndex = 0;
           await this.play();
         } else {
-          this._startIdleTimeout();
-          await this._updatePanel();
+          await this._handleQueueFinished();
         }
       } else {
         await this.play();
       }
     }
+  }
+
+  async _handleQueueFinished() {
+    this._clearIdleTimeout();
+    const last = this._lastTrack || this.tracks[this.currentIndex];
+
+    if (this.autoplay && last) {
+      try {
+        const result = await this._getNode().rest.resolve(`ytsearch:${last.title}`);
+        const parsed = parseLavalinkResult(result, last.requester);
+        if (parsed[0]) {
+          this.tracks = [parsed[0]];
+          this.currentIndex = 0;
+          await this.play();
+          return;
+        }
+      } catch (e) {
+        console.error('AutoPlay failed:', e.message);
+      }
+    }
+
+    if (this.stay247) {
+      this.tracks = [];
+      this.currentIndex = 0;
+      if (this.lavalinkPlayer) {
+        try { this.lavalinkPlayer.stopTrack(); } catch {}
+      }
+      this.paused = false;
+      await this._updatePanel();
+      return;
+    }
+    this._startIdleTimeout();
+    await this._updatePanel();
+  }
+
+  async stopPlayback() {
+    this.tracks = [];
+    this.currentIndex = 0;
+    if (this.lavalinkPlayer) {
+      try { this.lavalinkPlayer.stopTrack(); } catch {}
+    }
+    this.paused = false;
+    await this._updatePanel();
   }
 
   skip(count = 1) {
@@ -369,9 +449,10 @@ class MusicQueue {
   }
 
   _startIdleTimeout() {
+    if (this.stay247) return;
     this._clearIdleTimeout();
     this.idleTimeout = setTimeout(async () => {
-      await this.textChannel.send('👋 Left the voice channel due to inactivity.').catch(() => {});
+      await this.textChannel.send('👋 Left the voice channel due to inactivity. Use `/join` for 24/7 mode.').catch(() => {});
       await this.destroy();
     }, 5 * 60 * 1000);
   }
@@ -400,4 +481,15 @@ class MusicQueue {
   }
 }
 
+/** Resolve tracks without joining voice (playlists, addurl). */
+async function resolveTracks(shoukaku, query, requester) {
+  if (!shoukaku) {
+    throw new Error('Lavalink is not configured. Set LAVALINK_HOST and LAVALINK_PASSWORD on Render.');
+  }
+  const temp = new MusicQueue('resolve', null, null, shoukaku);
+  return temp.resolveQuery(query, requester);
+}
+
 module.exports = MusicQueue;
+module.exports.resolveTracks = resolveTracks;
+module.exports.formatError = formatError;

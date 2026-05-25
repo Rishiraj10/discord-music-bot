@@ -87,7 +87,7 @@ module.exports = {
           components: [],
         });
 
-        await updatePlayerPanel(queue);
+        await updatePlayerPanel(queue, client);
       } catch (e) {
         console.error('Search button error:', e);
         try {
