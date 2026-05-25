@@ -55,7 +55,7 @@ module.exports = {
       const chosen = results[idx];
       await btn.deferUpdate();
 
-      const { queue } = await getOrCreateQueue(interaction);
+      const { queue } = await getOrCreateQueue(btn);
       if (!queue) return;
 
       const track = {

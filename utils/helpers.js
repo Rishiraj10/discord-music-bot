@@ -1,9 +1,9 @@
 const { EmbedBuilder } = require('discord.js');
+const { VoiceConnectionStatus } = require('@discordjs/voice');
 const MusicQueue = require('../MusicQueue');
 
 /**
  * Gets or creates a MusicQueue for a guild.
- * Returns { queue, created } — if created=true, caller must call queue.connect().
  */
 async function getOrCreateQueue(interaction) {
   const { client, guild, channel } = interaction;
@@ -29,11 +29,19 @@ async function getOrCreateQueue(interaction) {
       await replyOrEdit(interaction, { content: `❌ ${e.message}`, ephemeral: true });
       return { queue: null };
     }
-  } else if (queue.voiceChannel.id !== voiceChannel.id) {
-    // Move bot to requester's channel
-    queue.voiceChannel = voiceChannel;
-    queue.connection?.destroy();
-    await queue.connect();
+  } else {
+    const needsReconnect = !queue.connection || queue.connection.state.status !== VoiceConnectionStatus.Ready;
+    if (queue.voiceChannel.id !== voiceChannel.id || needsReconnect) {
+      queue.voiceChannel = voiceChannel;
+      queue.textChannel = channel;
+      queue.connection?.destroy();
+      try {
+        await queue.connect();
+      } catch (e) {
+        await replyOrEdit(interaction, { content: `❌ ${e.message}`, ephemeral: true });
+        return { queue: null };
+      }
+    }
   }
 
   return { queue, created };
