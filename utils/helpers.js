@@ -11,7 +11,7 @@ async function getOrCreateQueue(interaction) {
 
   const voiceChannel = member?.voice?.channel;
   if (!voiceChannel) {
-    await interaction.reply({ content: '❌ You must be in a voice channel!', ephemeral: true });
+    await replyOrEdit(interaction, { content: '❌ You must be in a voice channel!', ephemeral: true });
     return { queue: null };
   }
 
@@ -26,7 +26,7 @@ async function getOrCreateQueue(interaction) {
       await queue.connect();
     } catch (e) {
       client.queues.delete(guild.id);
-      await interaction.reply({ content: `❌ ${e.message}`, ephemeral: true });
+      await replyOrEdit(interaction, { content: `❌ ${e.message}`, ephemeral: true });
       return { queue: null };
     }
   } else if (queue.voiceChannel.id !== voiceChannel.id) {
@@ -37,6 +37,17 @@ async function getOrCreateQueue(interaction) {
   }
 
   return { queue, created };
+}
+
+async function replyOrEdit(interaction, response) {
+  if (interaction.deferred || interaction.replied) {
+    try {
+      return await interaction.editReply(response);
+    } catch {
+      return interaction.followUp(response);
+    }
+  }
+  return interaction.reply(response);
 }
 
 function nowPlayingEmbed(track, queue) {
