@@ -1,4 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { updatePlayerPanel, destroyPlayerPanel } = require('../utils/playerUI');
 
 function getQueue(interaction, client) {
   const queue = client.queues.get(interaction.guild.id);
@@ -23,6 +24,7 @@ const skip = {
     const count = interaction.options.getInteger('count') ?? 1;
     const track = queue.getCurrentTrack();
     queue.skip(count);
+    await updatePlayerPanel(queue);
     await interaction.reply({
       embeds: [new EmbedBuilder()
         .setColor(0xFFA500)
@@ -41,6 +43,7 @@ const pause = {
     if (!queue) return;
     if (queue.paused) return interaction.reply({ content: '⏸ Already paused!', ephemeral: true });
     queue.pause();
+    await updatePlayerPanel(queue);
     await interaction.reply({ embeds: [new EmbedBuilder().setColor(0xFFA500).setDescription('⏸ Paused the music.')] });
   },
 };
@@ -55,6 +58,7 @@ const resume = {
     if (!queue) return;
     if (!queue.paused) return interaction.reply({ content: '▶️ Already playing!', ephemeral: true });
     queue.resume();
+    await updatePlayerPanel(queue);
     await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('▶️ Resumed the music.')] });
   },
 };
@@ -68,6 +72,7 @@ const stop = {
     const queue = getQueue(interaction, client);
     if (!queue) return;
     queue.tracks = [];
+    await destroyPlayerPanel(queue);
     queue.destroy();
     client.queues.delete(interaction.guild.id);
     await interaction.reply({ embeds: [new EmbedBuilder().setColor(0xFF0000).setDescription('⏹ Stopped music and cleared the queue.')] });
@@ -87,6 +92,7 @@ const volume = {
     if (!queue) return;
     const level = interaction.options.getInteger('level');
     queue.setVolume(level);
+    await updatePlayerPanel(queue);
     const emoji = level === 0 ? '🔇' : level < 50 ? '🔈' : level < 100 ? '🔉' : '🔊';
     await interaction.reply({
       embeds: [new EmbedBuilder()
@@ -105,6 +111,7 @@ const previous = {
     const queue = getQueue(interaction, client);
     if (!queue) return;
     queue.previous();
+    await updatePlayerPanel(queue);
     const track = queue.getCurrentTrack();
     await interaction.reply({
       embeds: [new EmbedBuilder()
@@ -134,6 +141,7 @@ const loop = {
     if (!queue) return;
     const mode = interaction.options.getString('mode');
     queue.setLoopMode(mode);
+    await updatePlayerPanel(queue);
     const labels = { none: '🚫 Loop Off', track: '🔂 Looping current track', queue: '🔁 Looping entire queue' };
     await interaction.reply({
       embeds: [new EmbedBuilder().setColor(0x5865F2).setDescription(`${labels[mode]}`)],
@@ -150,6 +158,7 @@ const shuffle = {
     const queue = getQueue(interaction, client);
     if (!queue) return;
     queue.shuffle();
+    await updatePlayerPanel(queue);
     await interaction.reply({
       embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('🔀 Queue shuffled!')],
     });
@@ -198,11 +207,14 @@ const join = {
     .setDescription('Make the bot join your voice channel (24/7 mode)'),
   async execute(interaction, client) {
     await interaction.deferReply();
-    const { queue } = await require('../utils/helpers').getOrCreateQueue(interaction);
+    const { getOrCreateQueue } = require('../utils/helpers');
+    const { updatePlayerPanel } = require('../utils/playerUI');
+    const { queue } = await getOrCreateQueue(interaction);
     if (!queue) return;
     await interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription(`✅ Joined **${interaction.member.voice.channel.name}**! Use \`/play\` to start music.`)],
+      embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription(`✅ Joined **${interaction.member.voice.channel.name}**! Use \`/play\` or the control panel below.`)],
     });
+    await updatePlayerPanel(queue);
   },
 };
 
@@ -213,6 +225,7 @@ const leave = {
   async execute(interaction, client) {
     const queue = client.queues.get(interaction.guild.id);
     if (queue) {
+      await destroyPlayerPanel(queue);
       queue.destroy();
       client.queues.delete(interaction.guild.id);
     }

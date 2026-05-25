@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const ytSearch = require('yt-search');
 const { getOrCreateQueue } = require('../utils/helpers');
+const { updatePlayerPanel } = require('../utils/playerUI');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -85,6 +86,8 @@ module.exports = {
             .setThumbnail(track.thumbnail)],
           components: [],
         });
+
+        await updatePlayerPanel(queue);
       } catch (e) {
         console.error('Search button error:', e);
         try {

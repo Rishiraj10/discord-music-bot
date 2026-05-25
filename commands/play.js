@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const { getOrCreateQueue, nowPlayingEmbed } = require('../utils/helpers');
+const { getOrCreateQueue } = require('../utils/helpers');
+const { updatePlayerPanel } = require('../utils/playerUI');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -49,6 +50,8 @@ module.exports = {
           .addFields({ name: 'First Track', value: tracks[0].title });
         await interaction.editReply({ embeds: [embed] });
       }
+
+      await updatePlayerPanel(queue);
     } catch (e) {
       await interaction.editReply(`❌ Error: ${e.message}`);
     }

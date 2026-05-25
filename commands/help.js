@@ -9,12 +9,19 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setColor(0x5865F2)
       .setTitle('🎵 Music Bot Commands')
-      .setDescription('All commands use Discord slash commands. Type `/` to see them!')
+      .setDescription('Use **slash commands** or the **🎛️ control panel** (buttons) after `/join` or `/play`.')
       .addFields(
+        {
+          name: '🎛️ Control panel buttons',
+          value: [
+            '⏮️ Previous · ⏸️ Pause/Resume · ⏭️ Skip · ⏹️ Stop · 🔀 Shuffle',
+            '🔁 Loop · 🔉/🔊 Volume · 📋 Queue · 🧹 Clear · 👋 Leave VC',
+          ].join('\n'),
+        },
         {
           name: '▶️ Playback',
           value: [
-            '`/play <query>` — Play from YouTube/Spotify URL or search term',
+            '`/play <query>` — YouTube URL, **Spotify URL**, or search term',
             '`/play <url> next:True` — Insert next in queue',
             '`/search <term>` — Search YouTube, pick from 5 results',
             '`/skip [count]` — Skip 1 or more songs',

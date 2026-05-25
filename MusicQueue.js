@@ -1,4 +1,3 @@
-const ytSearch = require('yt-search');
 const SpotifyWebApi = require('spotify-web-api-node');
 require('dotenv').config();
 
@@ -8,6 +7,7 @@ const spotifyApi = new SpotifyWebApi({
 });
 
 async function refreshSpotifyToken() {
+  if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) return;
   try {
     const data = await spotifyApi.clientCredentialsGrant();
     spotifyApi.setAccessToken(data.body['access_token']);
@@ -19,6 +19,12 @@ async function refreshSpotifyToken() {
 }
 refreshSpotifyToken();
 
+function normalizeSpotifyUrl(url) {
+  return url
+    .replace(/open\.spotify\.com\/intl-[a-z]{2}\//i, 'open.spotify.com/')
+    .split('?')[0];
+}
+
 function formatMs(ms) {
   if (!ms || ms < 0) return '?:??';
   const totalSec = Math.floor(ms / 1000);
@@ -27,19 +33,19 @@ function formatMs(ms) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function trackFromLavalink(data, requester) {
+function trackFromLavalink(data, requester, meta = {}) {
   const info = data.info;
   return {
-    title: info.title,
-    url: info.uri || info.sourceName || '',
+    title: meta.title || info.title,
+    url: info.uri || meta.url || '',
     duration: formatMs(info.length),
-    thumbnail: info.artworkUrl || '',
+    thumbnail: meta.thumbnail || info.artworkUrl || '',
     requester,
     encoded: data.encoded,
   };
 }
 
-function parseLavalinkResult(result, requester) {
+function parseLavalinkResult(result, requester, meta = {}) {
   if (result.loadType === 'error') {
     throw new Error(result.data?.message || 'Failed to load track.');
   }
@@ -49,14 +55,29 @@ function parseLavalinkResult(result, requester) {
 
   const tracks = [];
   if (result.loadType === 'track') {
-    tracks.push(trackFromLavalink(result.data, requester));
+    tracks.push(trackFromLavalink(result.data, requester, meta));
   } else if (result.loadType === 'search') {
-    for (const t of result.data) tracks.push(trackFromLavalink(t, requester));
+    const list = Array.isArray(result.data) ? result.data : result.data?.tracks || [];
+    for (const t of list) tracks.push(trackFromLavalink(t, requester, meta));
   } else if (result.loadType === 'playlist') {
-    for (const t of result.data.tracks) tracks.push(trackFromLavalink(t, requester));
+    const list = result.data.tracks || result.data;
+    for (const t of list) tracks.push(trackFromLavalink(t, requester, meta));
   }
   if (!tracks.length) throw new Error('No results found.');
   return tracks;
+}
+
+async function mapLimit(items, limit, fn) {
+  const results = [];
+  let i = 0;
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 class MusicQueue {
@@ -73,12 +94,23 @@ class MusicQueue {
     this.lavalinkPlayer = null;
     this.idleTimeout = null;
     this._eventsBound = false;
+    this.panelMessage = null;
+    this.panelView = 'player';
+    this.queuePage = 1;
   }
 
   _getNode() {
     const node = this.shoukaku.getIdealNode();
     if (!node) throw new Error('Music server (Lavalink) is offline. Check LAVALINK_* env vars on Render.');
     return node;
+  }
+
+  async _resolveYoutubeSearch(artist, title, requester, thumbnail = '') {
+    const node = this._getNode();
+    const query = `ytsearch:${artist} - ${title}`;
+    const result = await node.rest.resolve(query);
+    const tracks = parseLavalinkResult(result, requester, { title: `${title} — ${artist}`, thumbnail });
+    return tracks[0];
   }
 
   async connect() {
@@ -118,12 +150,23 @@ class MusicQueue {
       this.currentIndex++;
       this.play().catch(() => {});
     });
+
+    this.lavalinkPlayer.on('start', () => {
+      this._updatePanel();
+    });
+  }
+
+  async _updatePanel() {
+    try {
+      const { updatePlayerPanel } = require('./utils/playerUI');
+      await updatePlayerPanel(this);
+    } catch {}
   }
 
   async resolveQuery(query, requester) {
     const node = this._getNode();
 
-    if (query.includes('spotify.com')) {
+    if (/spotify\.com/i.test(query)) {
       return this._resolveSpotify(query, requester);
     }
 
@@ -133,50 +176,57 @@ class MusicQueue {
   }
 
   async _resolveSpotify(url, requester) {
+    if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
+      throw new Error('Spotify is not configured. Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render.');
+    }
+
+    const normalized = normalizeSpotifyUrl(url);
     const tracks = [];
+
     try {
-      if (url.includes('/track/')) {
-        const id = url.split('/track/')[1].split('?')[0];
-        const data = await spotifyApi.getTrack(id);
-        const t = data.body;
-        const search = await ytSearch(`${t.name} ${t.artists[0].name} official audio`);
-        const video = search.videos[0];
-        if (video) {
-          const resolved = await this._getNode().rest.resolve(video.url);
-          tracks.push(...parseLavalinkResult(resolved, requester));
-        }
-      } else if (url.includes('/playlist/')) {
-        const id = url.split('/playlist/')[1].split('?')[0];
-        const data = await spotifyApi.getPlaylistTracks(id, { limit: 50 });
-        for (const item of data.body.items) {
-          if (!item.track) continue;
-          const t = item.track;
-          const search = await ytSearch(`${t.name} ${t.artists[0].name} audio`);
-          const video = search.videos[0];
-          if (video) {
-            const resolved = await this._getNode().rest.resolve(video.url);
-            tracks.push(...parseLavalinkResult(resolved, requester).slice(0, 1));
-          }
-        }
-      } else if (url.includes('/album/')) {
-        const id = url.split('/album/')[1].split('?')[0];
-        const data = await spotifyApi.getAlbumTracks(id, { limit: 50 });
-        const albumInfo = await spotifyApi.getAlbum(id);
-        const artist = albumInfo.body.artists[0].name;
-        for (const t of data.body.items) {
-          const search = await ytSearch(`${t.name} ${artist} audio`);
-          const video = search.videos[0];
-          if (video) {
-            const resolved = await this._getNode().rest.resolve(video.url);
-            tracks.push(...parseLavalinkResult(resolved, requester).slice(0, 1));
-          }
-        }
+      if (normalized.includes('/track/')) {
+        const id = normalized.split('/track/')[1].split('/')[0];
+        const { body: t } = await spotifyApi.getTrack(id);
+        const artist = t.artists.map(a => a.name).join(', ');
+        const track = await this._resolveYoutubeSearch(artist, t.name, requester, t.album?.images?.[0]?.url || '');
+        if (track) tracks.push(track);
+      } else if (normalized.includes('/playlist/')) {
+        const id = normalized.split('/playlist/')[1].split('/')[0];
+        const { body } = await spotifyApi.getPlaylistTracks(id, { limit: 50 });
+        const items = body.items.filter(i => i.track).map(i => ({
+          artist: i.track.artists.map(a => a.name).join(', '),
+          title: i.track.name,
+          thumbnail: i.track.album?.images?.[0]?.url || '',
+        }));
+        const resolved = await mapLimit(items, 4, item =>
+          this._resolveYoutubeSearch(item.artist, item.title, requester, item.thumbnail).catch(() => null)
+        );
+        tracks.push(...resolved.filter(Boolean));
+      } else if (normalized.includes('/album/')) {
+        const id = normalized.split('/album/')[1].split('/')[0];
+        const [{ body: album }, { body: albumTracks }] = await Promise.all([
+          spotifyApi.getAlbum(id),
+          spotifyApi.getAlbumTracks(id, { limit: 50 }),
+        ]);
+        const artist = album.artists.map(a => a.name).join(', ');
+        const thumb = album.images?.[0]?.url || '';
+        const items = albumTracks.items.map(t => ({ artist, title: t.name, thumbnail: thumb }));
+        const resolved = await mapLimit(items, 4, item =>
+          this._resolveYoutubeSearch(item.artist, item.title, requester, item.thumbnail).catch(() => null)
+        );
+        tracks.push(...resolved.filter(Boolean));
+      } else {
+        throw new Error('Unsupported Spotify link. Use a track, playlist, or album URL.');
       }
     } catch (e) {
-      const message = e?.message || e?.body || JSON.stringify(e);
+      if (e.message?.includes('not configured') || e.message?.includes('Unsupported')) throw e;
+      const message = e?.message || e?.body?.error?.message || JSON.stringify(e);
       throw new Error(`Spotify error: ${message}`);
     }
-    if (!tracks.length) throw new Error('No Spotify tracks resolved.');
+
+    if (!tracks.length) {
+      throw new Error('Could not find YouTube matches for that Spotify link. Try a direct YouTube URL or song name.');
+    }
     return tracks;
   }
 
@@ -190,6 +240,8 @@ class MusicQueue {
     const playing = this.lavalinkPlayer?.playing;
     if (!playing && !this.paused) {
       await this.play();
+    } else {
+      await this._updatePanel();
     }
   }
 
@@ -202,15 +254,17 @@ class MusicQueue {
         this.currentIndex = 0;
       } else {
         this._startIdleTimeout();
+        await this._updatePanel();
         return;
       }
     }
 
     const track = this.tracks[this.currentIndex];
     if (!track.encoded) {
-      const result = await this._getNode().rest.resolve(track.url);
+      const result = await this._getNode().rest.resolve(track.url || `ytsearch:${track.title}`);
       const parsed = parseLavalinkResult(result, track.requester);
       track.encoded = parsed[0].encoded;
+      if (!track.url) track.url = parsed[0].url;
     }
 
     if (!this.lavalinkPlayer) {
@@ -226,6 +280,8 @@ class MusicQueue {
       });
       this.paused = false;
       this._clearIdleTimeout();
+      this.panelView = 'player';
+      await this._updatePanel();
     } catch (e) {
       console.error(`Error playing ${track.title}:`, e.message);
       await this.textChannel.send(`⚠️ Could not play **${track.title}**, skipping...`).catch(() => {});
@@ -234,20 +290,21 @@ class MusicQueue {
     }
   }
 
-  _onIdle() {
+  async _onIdle() {
     if (this.loopMode === 'track') {
-      this.play();
+      await this.play();
     } else {
       this.currentIndex++;
       if (this.currentIndex >= this.tracks.length) {
         if (this.loopMode === 'queue') {
           this.currentIndex = 0;
-          this.play();
+          await this.play();
         } else {
           this._startIdleTimeout();
+          await this._updatePanel();
         }
       } else {
-        this.play();
+        await this.play();
       }
     }
   }
@@ -255,12 +312,12 @@ class MusicQueue {
   skip(count = 1) {
     this.currentIndex += count;
     if (this.currentIndex >= this.tracks.length) this.currentIndex = this.tracks.length - 1;
-    this.play(this.currentIndex);
+    return this.play(this.currentIndex);
   }
 
   previous() {
     if (this.currentIndex > 0) this.currentIndex--;
-    this.play(this.currentIndex);
+    return this.play(this.currentIndex);
   }
 
   pause() {
@@ -313,9 +370,9 @@ class MusicQueue {
 
   _startIdleTimeout() {
     this._clearIdleTimeout();
-    this.idleTimeout = setTimeout(() => {
-      this.textChannel.send('👋 Left the voice channel due to inactivity.').catch(() => {});
-      this.destroy();
+    this.idleTimeout = setTimeout(async () => {
+      await this.textChannel.send('👋 Left the voice channel due to inactivity.').catch(() => {});
+      await this.destroy();
     }, 5 * 60 * 1000);
   }
 
@@ -324,7 +381,7 @@ class MusicQueue {
     this.idleTimeout = null;
   }
 
-  destroy() {
+  async destroy() {
     this._clearIdleTimeout();
     if (this.lavalinkPlayer) {
       try {
@@ -336,6 +393,10 @@ class MusicQueue {
     } catch {}
     this.lavalinkPlayer = null;
     this._eventsBound = false;
+    try {
+      const { destroyPlayerPanel } = require('./utils/playerUI');
+      await destroyPlayerPanel(this);
+    } catch {}
   }
 }
 

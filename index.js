@@ -18,13 +18,18 @@ const client = new Client({
   ],
 });
 
+function cleanEnv(value) {
+  if (!value) return value;
+  return value.trim().replace(/^['"]|['"]$/g, '').replace(/^host\s*:\s*/i, '').trim();
+}
+
 function getLavalinkNodes() {
-  const host = process.env.LAVALINK_HOST;
-  const password = process.env.LAVALINK_PASSWORD;
+  const host = cleanEnv(process.env.LAVALINK_HOST);
+  const password = cleanEnv(process.env.LAVALINK_PASSWORD);
   if (!host || !password) return [];
 
   const secure = process.env.LAVALINK_SECURE !== 'false';
-  const port = process.env.LAVALINK_PORT || (secure ? '443' : '2333');
+  const port = cleanEnv(process.env.LAVALINK_PORT) || (secure ? '443' : '2333');
   return [{
     name: 'main',
     url: `${host}:${port}`,
@@ -91,7 +96,18 @@ client.once('ready', async () => {
   }
 });
 
+const { handleMusicButton } = require('./utils/playerUI');
+
 client.on('interactionCreate', async interaction => {
+  if (interaction.isButton() && interaction.customId.startsWith('music_')) {
+    try {
+      await handleMusicButton(interaction, client);
+    } catch (error) {
+      console.error('Button error:', error);
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);

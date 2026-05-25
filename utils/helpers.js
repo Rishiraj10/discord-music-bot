@@ -84,7 +84,7 @@ function nowPlayingEmbed(track, queue) {
       { name: '🔁 Loop', value: queue.loopMode === 'none' ? 'Off' : queue.loopMode === 'track' ? '🔂 Track' : '🔁 Queue', inline: true },
       { name: '📋 Queue', value: `${queue.tracks.length} track(s)`, inline: true },
     )
-    .setFooter({ text: `Track ${queue.currentIndex + 1} of ${queue.tracks.length}` });
+    .setFooter({ text: `Track ${queue.currentIndex + 1} of ${queue.tracks.length} • Use buttons below to control` });
 }
 
 function queueEmbed(queue, page = 1) {
