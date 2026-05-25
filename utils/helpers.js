@@ -30,11 +30,13 @@ async function getOrCreateQueue(interaction) {
       return { queue: null };
     }
   } else {
-    const needsReconnect = !queue.connection || queue.connection.state.status !== VoiceConnectionStatus.Ready;
+    const needsReconnect = !queue.connection || queue.connection.state?.status !== VoiceConnectionStatus.Ready;
     if (queue.voiceChannel.id !== voiceChannel.id || needsReconnect) {
       queue.voiceChannel = voiceChannel;
       queue.textChannel = channel;
-      queue.connection?.destroy();
+      if (queue.connection && queue.connection.state?.status !== VoiceConnectionStatus.Destroyed) {
+        queue.connection.destroy();
+      }
       try {
         await queue.connect();
       } catch (e) {

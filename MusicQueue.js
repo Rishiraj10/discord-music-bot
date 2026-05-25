@@ -64,7 +64,9 @@ class MusicQueue {
       await entersState(this.connection, VoiceConnectionStatus.Ready, 30_000);
       this.connection.subscribe(this.player);
     } catch {
-      this.connection.destroy();
+      if (this.connection && this.connection.state?.status !== VoiceConnectionStatus.Destroyed) {
+        this.connection.destroy();
+      }
       throw new Error('Could not connect to voice channel.');
     }
 
@@ -145,7 +147,8 @@ class MusicQueue {
         }
       }
     } catch (e) {
-      throw new Error(`Spotify error: ${e.message}`);
+      const message = e?.message || e?.body || JSON.stringify(e);
+      throw new Error(`Spotify error: ${message}`);
     }
     if (!tracks.length) throw new Error('No Spotify tracks resolved.');
     return tracks;
@@ -297,7 +300,9 @@ class MusicQueue {
     this._clearIdleTimeout();
     this.player.stop(true);
     if (this.connection) {
-      this.connection.destroy();
+      if (this.connection.state?.status !== VoiceConnectionStatus.Destroyed) {
+        this.connection.destroy();
+      }
       this.connection = null;
     }
   }

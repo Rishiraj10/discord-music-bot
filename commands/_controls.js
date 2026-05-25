@@ -197,23 +197,11 @@ const join = {
     .setName('join')
     .setDescription('Make the bot join your voice channel (24/7 mode)'),
   async execute(interaction, client) {
-    const voiceChannel = interaction.member?.voice?.channel;
-    if (!voiceChannel) return interaction.reply({ content: '❌ Join a voice channel first!', ephemeral: true });
-
-    let queue = client.queues.get(interaction.guild.id);
-    if (!queue) {
-      const MusicQueue = require('../MusicQueue');
-      queue = new MusicQueue(interaction.guild.id, interaction.channel, voiceChannel);
-      client.queues.set(interaction.guild.id, queue);
-      try {
-        await queue.connect();
-      } catch (e) {
-        client.queues.delete(interaction.guild.id);
-        return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true });
-      }
-    }
-    await interaction.reply({
-      embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription(`✅ Joined **${voiceChannel.name}**! Use \`/play\` to start music.`)],
+    await interaction.deferReply();
+    const { queue } = await require('../utils/helpers').getOrCreateQueue(interaction);
+    if (!queue) return;
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription(`✅ Joined **${interaction.member.voice.channel.name}**! Use \`/play\` to start music.`)],
     });
   },
 };
