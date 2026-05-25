@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: discord-music-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: PORT
+        value: 10000
+    healthCheckPath: /
