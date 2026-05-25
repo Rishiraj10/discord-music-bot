@@ -4,6 +4,7 @@ process.on('unhandledRejection', err => console.error('Unhandled Rejection:', er
 const { Client, GatewayIntentBits, Collection, ActivityType } = require('discord.js');
 const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v10');
+const { Shoukaku, Connectors } = require('shoukaku');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
@@ -17,11 +18,44 @@ const client = new Client({
   ],
 });
 
-client.commands = new Collection();
-client.queues = new Map();      // guildId -> MusicQueue
-client.playlists = new Map();   // userId -> { name: [tracks] }
+function getLavalinkNodes() {
+  const host = process.env.LAVALINK_HOST;
+  const password = process.env.LAVALINK_PASSWORD;
+  if (!host || !password) return [];
 
-// Load playlist data from JSON
+  const secure = process.env.LAVALINK_SECURE !== 'false';
+  const port = process.env.LAVALINK_PORT || (secure ? '443' : '2333');
+  return [{
+    name: 'main',
+    url: `${host}:${port}`,
+    auth: password,
+    secure,
+  }];
+}
+
+const lavalinkNodes = getLavalinkNodes();
+if (!lavalinkNodes.length) {
+  console.error(
+    '❌ Missing LAVALINK_HOST and LAVALINK_PASSWORD.',
+    'Add them in Render → Environment (see README for free Lavalink nodes).'
+  );
+} else {
+  client.shoukaku = new Shoukaku(new Connectors.DiscordJS(client), lavalinkNodes, {
+    moveOnDisconnect: false,
+    resume: false,
+    reconnectTries: 5,
+    reconnectInterval: 5000,
+  });
+
+  client.shoukaku.on('ready', name => console.log(`✅ Lavalink node "${name}" connected`));
+  client.shoukaku.on('error', (name, err) => console.error(`Lavalink "${name}" error:`, err?.message || err));
+  client.shoukaku.on('close', (name, code, reason) => console.warn(`Lavalink "${name}" closed (${code}):`, reason));
+}
+
+client.commands = new Collection();
+client.queues = new Map();
+client.playlists = new Map();
+
 const PLAYLIST_FILE = './data/playlists.json';
 if (fs.existsSync(PLAYLIST_FILE)) {
   const data = JSON.parse(fs.readFileSync(PLAYLIST_FILE, 'utf8'));
@@ -30,7 +64,6 @@ if (fs.existsSync(PLAYLIST_FILE)) {
   }
 }
 
-// Load all commands
 const commandsPath = path.join(__dirname, 'commands');
 const commandFiles = fs.readdirSync(commandsPath).filter(f => f.endsWith('.js') && !f.startsWith('_'));
 const commandsData = [];
@@ -44,19 +77,14 @@ for (const file of commandFiles) {
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // Set bot activity
   client.user.setPresence({
     activities: [{ name: '🎵 /play to start music!', type: ActivityType.Listening }],
     status: 'online',
   });
 
-  // Register slash commands
   const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
   try {
-    await rest.put(
-      Routes.applicationCommands(client.user.id),
-      { body: commandsData }
-    );
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commandsData });
     console.log('✅ Slash commands registered globally.');
   } catch (err) {
     console.error('Error registering commands:', err);
@@ -67,10 +95,7 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
-  if (!command) {
-    console.warn(`⚠️ No command handler for /${interaction.commandName}`);
-    return;
-  }
+  if (!command) return;
 
   try {
     await command.execute(interaction, client);
@@ -85,13 +110,12 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// Keep-alive for free hosting (UptimeRobot ping)
 const http = require('http');
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end('Bot is alive!');
 }).listen(process.env.PORT || 3000, () => {
-  console.log(`🌐 Keep-alive server running on port ${process.env.PORT || 3000}`);
+  console.log(`🌐 Keep-alive server on port ${process.env.PORT || 3000}`);
 });
 
 client.login(process.env.BOT_TOKEN);

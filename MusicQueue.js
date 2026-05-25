@@ -1,13 +1,3 @@
-const {
-  createAudioPlayer,
-  createAudioResource,
-  AudioPlayerStatus,
-  VoiceConnectionStatus,
-  entersState,
-  joinVoiceChannel,
-  getVoiceConnection,
-} = require('@discordjs/voice');
-const ytdl = require('@distube/ytdl-core');
 const ytSearch = require('yt-search');
 const SpotifyWebApi = require('spotify-web-api-node');
 require('dotenv').config();
@@ -17,12 +7,10 @@ const spotifyApi = new SpotifyWebApi({
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
 });
 
-// Refresh Spotify token
 async function refreshSpotifyToken() {
   try {
     const data = await spotifyApi.clientCredentialsGrant();
     spotifyApi.setAccessToken(data.body['access_token']);
-    // Refresh before expiry
     setTimeout(refreshSpotifyToken, (data.body['expires_in'] - 60) * 1000);
   } catch (e) {
     console.error('Spotify token error:', e.message);
@@ -31,87 +19,117 @@ async function refreshSpotifyToken() {
 }
 refreshSpotifyToken();
 
+function formatMs(ms) {
+  if (!ms || ms < 0) return '?:??';
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function trackFromLavalink(data, requester) {
+  const info = data.info;
+  return {
+    title: info.title,
+    url: info.uri || info.sourceName || '',
+    duration: formatMs(info.length),
+    thumbnail: info.artworkUrl || '',
+    requester,
+    encoded: data.encoded,
+  };
+}
+
+function parseLavalinkResult(result, requester) {
+  if (result.loadType === 'error') {
+    throw new Error(result.data?.message || 'Failed to load track.');
+  }
+  if (result.loadType === 'empty') {
+    throw new Error('No results found.');
+  }
+
+  const tracks = [];
+  if (result.loadType === 'track') {
+    tracks.push(trackFromLavalink(result.data, requester));
+  } else if (result.loadType === 'search') {
+    for (const t of result.data) tracks.push(trackFromLavalink(t, requester));
+  } else if (result.loadType === 'playlist') {
+    for (const t of result.data.tracks) tracks.push(trackFromLavalink(t, requester));
+  }
+  if (!tracks.length) throw new Error('No results found.');
+  return tracks;
+}
+
 class MusicQueue {
-  constructor(guildId, textChannel, voiceChannel) {
+  constructor(guildId, textChannel, voiceChannel, shoukaku) {
     this.guildId = guildId;
     this.textChannel = textChannel;
     this.voiceChannel = voiceChannel;
-    this.tracks = [];       // array of { title, url, duration, requester, thumbnail }
+    this.shoukaku = shoukaku;
+    this.tracks = [];
     this.currentIndex = 0;
-    this.volume = 0.5;
-    this.loop = false;      // 'none' | 'track' | 'queue'
+    this.volume = 50;
     this.loopMode = 'none';
     this.paused = false;
-    this.player = createAudioPlayer();
-    this.connection = null;
+    this.lavalinkPlayer = null;
     this.idleTimeout = null;
+    this._eventsBound = false;
+  }
 
-    this.player.on(AudioPlayerStatus.Idle, () => this._onIdle());
-    this.player.on('error', err => {
-      console.error('Player error:', err.message);
-      this._onIdle();
-    });
+  _getNode() {
+    const node = this.shoukaku.getIdealNode();
+    if (!node) throw new Error('Music server (Lavalink) is offline. Check LAVALINK_* env vars on Render.');
+    return node;
   }
 
   async connect() {
-    this.connection = joinVoiceChannel({
-      channelId: this.voiceChannel.id,
-      guildId: this.guildId,
-      adapterCreator: this.voiceChannel.guild.voiceAdapterCreator,
-      selfDeaf: true,
-    });
+    this._getNode();
+
+    const guild = this.voiceChannel.guild;
     try {
-      await entersState(this.connection, VoiceConnectionStatus.Ready, 30_000);
-      this.connection.subscribe(this.player);
-    } catch {
-      if (this.connection && this.connection.state?.status !== VoiceConnectionStatus.Destroyed) {
-        this.connection.destroy();
-      }
-      throw new Error('Could not connect to voice channel.');
+      await this.shoukaku.joinVoiceChannel({
+        guildId: this.guildId,
+        channelId: this.voiceChannel.id,
+        shardId: guild.shard?.id ?? 0,
+        deaf: true,
+      });
+    } catch (err) {
+      console.error('Voice join failed:', err?.message || err);
+      throw new Error(
+        'Could not connect to voice channel. Check bot permissions (Connect, Speak) and that you are in a voice channel.'
+      );
     }
 
-    this.connection.on(VoiceConnectionStatus.Disconnected, async () => {
-      try {
-        await Promise.race([
-          entersState(this.connection, VoiceConnectionStatus.Signalling, 5_000),
-          entersState(this.connection, VoiceConnectionStatus.Connecting, 5_000),
-        ]);
-      } catch {
-        this.destroy();
-      }
+    this.lavalinkPlayer = this.shoukaku.players.get(this.guildId);
+    this._bindPlayerEvents();
+  }
+
+  _bindPlayerEvents() {
+    if (!this.lavalinkPlayer || this._eventsBound) return;
+    this._eventsBound = true;
+
+    this.lavalinkPlayer.on('end', (data) => {
+      if (data.reason === 'replaced' || data.reason === 'stopped') return;
+      this._onIdle();
+    });
+
+    this.lavalinkPlayer.on('exception', (data) => {
+      console.error('Playback error:', data.exception?.message || data);
+      this.textChannel.send('⚠️ Playback error, skipping...').catch(() => {});
+      this.currentIndex++;
+      this.play().catch(() => {});
     });
   }
 
   async resolveQuery(query, requester) {
-    // YouTube URL
-    if (ytdl.validateURL(query)) {
-      const info = await ytdl.getInfo(query);
-      const details = info.videoDetails;
-      return [{
-        title: details.title,
-        url: details.video_url,
-        duration: this._formatDuration(parseInt(details.lengthSeconds)),
-        thumbnail: details.thumbnails.slice(-1)[0]?.url || '',
-        requester,
-      }];
-    }
+    const node = this._getNode();
 
-    // Spotify URL
     if (query.includes('spotify.com')) {
-      return await this._resolveSpotify(query, requester);
+      return this._resolveSpotify(query, requester);
     }
 
-    // Plain text search → YouTube
-    const result = await ytSearch(query);
-    const video = result.videos[0];
-    if (!video) throw new Error('No results found.');
-    return [{
-      title: video.title,
-      url: video.url,
-      duration: video.timestamp || '?:??',
-      thumbnail: video.thumbnail || '',
-      requester,
-    }];
+    const identifier = /^https?:\/\//i.test(query) ? query : `ytsearch:${query}`;
+    const result = await node.rest.resolve(identifier);
+    return parseLavalinkResult(result, requester);
   }
 
   async _resolveSpotify(url, requester) {
@@ -123,7 +141,10 @@ class MusicQueue {
         const t = data.body;
         const search = await ytSearch(`${t.name} ${t.artists[0].name} official audio`);
         const video = search.videos[0];
-        if (video) tracks.push({ title: `${t.name} — ${t.artists[0].name}`, url: video.url, duration: video.timestamp, thumbnail: t.album.images[0]?.url || '', requester });
+        if (video) {
+          const resolved = await this._getNode().rest.resolve(video.url);
+          tracks.push(...parseLavalinkResult(resolved, requester));
+        }
       } else if (url.includes('/playlist/')) {
         const id = url.split('/playlist/')[1].split('?')[0];
         const data = await spotifyApi.getPlaylistTracks(id, { limit: 50 });
@@ -132,18 +153,23 @@ class MusicQueue {
           const t = item.track;
           const search = await ytSearch(`${t.name} ${t.artists[0].name} audio`);
           const video = search.videos[0];
-          if (video) tracks.push({ title: `${t.name} — ${t.artists[0].name}`, url: video.url, duration: video.timestamp, thumbnail: t.album.images[0]?.url || '', requester });
+          if (video) {
+            const resolved = await this._getNode().rest.resolve(video.url);
+            tracks.push(...parseLavalinkResult(resolved, requester).slice(0, 1));
+          }
         }
       } else if (url.includes('/album/')) {
         const id = url.split('/album/')[1].split('?')[0];
         const data = await spotifyApi.getAlbumTracks(id, { limit: 50 });
         const albumInfo = await spotifyApi.getAlbum(id);
-        const albumName = albumInfo.body.name;
         const artist = albumInfo.body.artists[0].name;
         for (const t of data.body.items) {
           const search = await ytSearch(`${t.name} ${artist} audio`);
           const video = search.videos[0];
-          if (video) tracks.push({ title: `${t.name} — ${artist}`, url: video.url, duration: video.timestamp, thumbnail: albumInfo.body.images[0]?.url || '', requester });
+          if (video) {
+            const resolved = await this._getNode().rest.resolve(video.url);
+            tracks.push(...parseLavalinkResult(resolved, requester).slice(0, 1));
+          }
         }
       }
     } catch (e) {
@@ -161,7 +187,8 @@ class MusicQueue {
       this.tracks.push(...newTracks);
     }
 
-    if (this.player.state.status === AudioPlayerStatus.Idle && !this.paused) {
+    const playing = this.lavalinkPlayer?.playing;
+    if (!playing && !this.paused) {
       await this.play();
     }
   }
@@ -169,6 +196,7 @@ class MusicQueue {
   async play(index = null) {
     if (index !== null) this.currentIndex = index;
     if (!this.tracks.length) return;
+
     if (this.currentIndex >= this.tracks.length) {
       if (this.loopMode === 'queue') {
         this.currentIndex = 0;
@@ -179,26 +207,28 @@ class MusicQueue {
     }
 
     const track = this.tracks[this.currentIndex];
+    if (!track.encoded) {
+      const result = await this._getNode().rest.resolve(track.url);
+      const parsed = parseLavalinkResult(result, track.requester);
+      track.encoded = parsed[0].encoded;
+    }
+
+    if (!this.lavalinkPlayer) {
+      this.lavalinkPlayer = this.shoukaku.players.get(this.guildId);
+      this._bindPlayerEvents();
+    }
+    if (!this.lavalinkPlayer) throw new Error('Not connected to a voice channel.');
+
     try {
-      const stream = ytdl(track.url, {
-        filter: 'audioonly',
-        quality: 'highestaudio',
-        highWaterMark: 1 << 25,
-        requestOptions: {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          }
-        }
+      await this.lavalinkPlayer.playTrack({
+        track: { encoded: track.encoded },
+        options: { volume: this.volume },
       });
-      const resource = createAudioResource(stream, { inlineVolume: true });
-      resource.volume.setVolume(this.volume);
-      this.currentResource = resource;
-      this.player.play(resource);
       this.paused = false;
       this._clearIdleTimeout();
     } catch (e) {
       console.error(`Error playing ${track.title}:`, e.message);
-      await this.textChannel.send(`⚠️ Could not play **${track.title}**, skipping...`);
+      await this.textChannel.send(`⚠️ Could not play **${track.title}**, skipping...`).catch(() => {});
       this.currentIndex++;
       await this.play();
     }
@@ -234,20 +264,18 @@ class MusicQueue {
   }
 
   pause() {
-    this.player.pause();
+    if (this.lavalinkPlayer) this.lavalinkPlayer.setPaused(true);
     this.paused = true;
   }
 
   resume() {
-    this.player.unpause();
+    if (this.lavalinkPlayer) this.lavalinkPlayer.setPaused(false);
     this.paused = false;
   }
 
   setVolume(vol) {
-    this.volume = Math.max(0, Math.min(2, vol / 100));
-    if (this.currentResource?.volume) {
-      this.currentResource.volume.setVolume(this.volume);
-    }
+    this.volume = Math.max(0, Math.min(200, vol));
+    if (this.lavalinkPlayer) this.lavalinkPlayer.setGlobalVolume(this.volume);
   }
 
   shuffle() {
@@ -276,7 +304,7 @@ class MusicQueue {
   }
 
   setLoopMode(mode) {
-    this.loopMode = mode; // 'none', 'track', 'queue'
+    this.loopMode = mode;
   }
 
   getCurrentTrack() {
@@ -286,9 +314,9 @@ class MusicQueue {
   _startIdleTimeout() {
     this._clearIdleTimeout();
     this.idleTimeout = setTimeout(() => {
-      this.textChannel.send('👋 Left the voice channel due to inactivity.');
+      this.textChannel.send('👋 Left the voice channel due to inactivity.').catch(() => {});
       this.destroy();
-    }, 5 * 60 * 1000); // 5 min idle
+    }, 5 * 60 * 1000);
   }
 
   _clearIdleTimeout() {
@@ -298,19 +326,16 @@ class MusicQueue {
 
   destroy() {
     this._clearIdleTimeout();
-    this.player.stop(true);
-    if (this.connection) {
-      if (this.connection.state?.status !== VoiceConnectionStatus.Destroyed) {
-        this.connection.destroy();
-      }
-      this.connection = null;
+    if (this.lavalinkPlayer) {
+      try {
+        this.lavalinkPlayer.stopTrack();
+      } catch {}
     }
-  }
-
-  _formatDuration(seconds) {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
+    try {
+      this.shoukaku.leaveVoiceChannel(this.guildId);
+    } catch {}
+    this.lavalinkPlayer = null;
+    this._eventsBound = false;
   }
 }
 

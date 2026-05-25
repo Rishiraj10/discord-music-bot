@@ -1,5 +1,4 @@
 const { EmbedBuilder } = require('discord.js');
-const { VoiceConnectionStatus } = require('@discordjs/voice');
 const MusicQueue = require('../MusicQueue');
 
 /**
@@ -7,8 +6,16 @@ const MusicQueue = require('../MusicQueue');
  */
 async function getOrCreateQueue(interaction) {
   const { client, guild, channel } = interaction;
-  const member = interaction.member;
 
+  if (!client.shoukaku) {
+    await replyOrEdit(interaction, {
+      content: '❌ Lavalink is not configured. Set **LAVALINK_HOST** and **LAVALINK_PASSWORD** in Render → Environment (see README).',
+      ephemeral: true,
+    });
+    return { queue: null };
+  }
+
+  const member = interaction.member;
   const voiceChannel = member?.voice?.channel;
   if (!voiceChannel) {
     await replyOrEdit(interaction, { content: '❌ You must be in a voice channel!', ephemeral: true });
@@ -19,7 +26,20 @@ async function getOrCreateQueue(interaction) {
   let created = false;
 
   if (!queue) {
-    queue = new MusicQueue(guild.id, channel, voiceChannel);
+    queue = new MusicQueue(guild.id, channel, voiceChannel, client.shoukaku);
+    client.queues.set(guild.id, queue);
+    created = true;
+    try {
+      await queue.connect();
+    } catch (e) {
+      client.queues.delete(guild.id);
+      await replyOrEdit(interaction, { content: `❌ ${e.message}`, ephemeral: true });
+      return { queue: null };
+    }
+  } else if (queue.voiceChannel.id !== voiceChannel.id) {
+    queue.destroy();
+    client.queues.delete(guild.id);
+    queue = new MusicQueue(guild.id, channel, voiceChannel, client.shoukaku);
     client.queues.set(guild.id, queue);
     created = true;
     try {
@@ -30,31 +50,21 @@ async function getOrCreateQueue(interaction) {
       return { queue: null };
     }
   } else {
-    const needsReconnect = !queue.connection || queue.connection.state?.status !== VoiceConnectionStatus.Ready;
-    if (queue.voiceChannel.id !== voiceChannel.id || needsReconnect) {
-      queue.voiceChannel = voiceChannel;
-      queue.textChannel = channel;
-      if (queue.connection && queue.connection.state?.status !== VoiceConnectionStatus.Destroyed) {
-        queue.connection.destroy();
-      }
-      try {
-        await queue.connect();
-      } catch (e) {
-        await replyOrEdit(interaction, { content: `❌ ${e.message}`, ephemeral: true });
-        return { queue: null };
-      }
-    }
+    queue.textChannel = channel;
   }
 
   return { queue, created };
 }
 
 async function replyOrEdit(interaction, response) {
+  const payload = { ...response };
+  // ephemeral is only valid on the initial reply, not on editReply/followUp for public messages
   if (interaction.deferred || interaction.replied) {
+    delete payload.ephemeral;
     try {
-      return await interaction.editReply(response);
+      return await interaction.editReply(payload);
     } catch {
-      return interaction.followUp(response);
+      return interaction.followUp(payload);
     }
   }
   return interaction.reply(response);
@@ -70,7 +80,7 @@ function nowPlayingEmbed(track, queue) {
     .addFields(
       { name: '⏱ Duration', value: track.duration || 'Live', inline: true },
       { name: '👤 Requested by', value: track.requester, inline: true },
-      { name: '🔊 Volume', value: `${Math.round(queue.volume * 100)}%`, inline: true },
+      { name: '🔊 Volume', value: `${queue.volume}%`, inline: true },
       { name: '🔁 Loop', value: queue.loopMode === 'none' ? 'Off' : queue.loopMode === 'track' ? '🔂 Track' : '🔁 Queue', inline: true },
       { name: '📋 Queue', value: `${queue.tracks.length} track(s)`, inline: true },
     )
@@ -94,7 +104,7 @@ function queueEmbed(queue, page = 1) {
     .setColor(0x5865F2)
     .setTitle(`📋 Queue — ${total} track(s)`)
     .setDescription(lines.join('\n') || 'Empty queue')
-    .setFooter({ text: `Page ${page}/${pages} • Loop: ${queue.loopMode} • Vol: ${Math.round(queue.volume * 100)}%` });
+    .setFooter({ text: `Page ${page}/${pages} • Loop: ${queue.loopMode} • Vol: ${queue.volume}%` });
 }
 
 function progressBar(current, total, length = 15) {

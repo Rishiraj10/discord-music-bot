@@ -50,32 +50,51 @@ module.exports = {
     });
 
     collector.on('collect', async btn => {
-      collector.stop();
-      const idx = parseInt(btn.customId.split('_')[1]);
-      const chosen = results[idx];
-      await btn.deferUpdate();
+      try {
+        collector.stop();
+        const idx = parseInt(btn.customId.split('_')[1], 10);
+        const chosen = results[idx];
+        if (!chosen) {
+          await btn.reply({ content: '❌ Invalid selection.', ephemeral: true });
+          return;
+        }
 
-      const { queue } = await getOrCreateQueue(btn);
-      if (!queue) return;
+        await btn.deferUpdate();
 
-      const track = {
-        title: chosen.title,
-        url: chosen.url,
-        duration: chosen.timestamp,
-        thumbnail: chosen.thumbnail,
-        requester: interaction.user.toString(),
-      };
+        const { queue } = await getOrCreateQueue(btn);
+        if (!queue) {
+          await interaction.editReply({ content: '❌ Could not join voice channel.', embeds: [], components: [] });
+          return;
+        }
 
-      await queue.addTracks([track]);
+        const track = {
+          title: chosen.title,
+          url: chosen.url,
+          duration: chosen.timestamp,
+          thumbnail: chosen.thumbnail,
+          requester: interaction.user.toString(),
+        };
 
-      await interaction.editReply({
-        embeds: [new EmbedBuilder()
-          .setColor(0x1DB954)
-          .setTitle('✅ Added to Queue')
-          .setDescription(`**[${track.title}](${track.url})**\n⏱ ${track.duration}`)
-          .setThumbnail(track.thumbnail)],
-        components: [],
-      });
+        await queue.addTracks([track]);
+
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setColor(0x1DB954)
+            .setTitle('✅ Added to Queue')
+            .setDescription(`**[${track.title}](${track.url})**\n⏱ ${track.duration}`)
+            .setThumbnail(track.thumbnail)],
+          components: [],
+        });
+      } catch (e) {
+        console.error('Search button error:', e);
+        try {
+          if (!btn.deferred && !btn.replied) {
+            await btn.reply({ content: `❌ ${e.message}`, ephemeral: true });
+          } else {
+            await interaction.editReply({ content: `❌ ${e.message}`, embeds: [], components: [] });
+          }
+        } catch {}
+      }
     });
 
     collector.on('end', (_, reason) => {

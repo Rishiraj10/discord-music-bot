@@ -5,6 +5,7 @@ services:
     plan: free
     buildCommand: npm install
     startCommand: node index.js
+    healthCheckPath: /
     envVars:
       - key: BOT_TOKEN
         sync: false
@@ -12,6 +13,13 @@ services:
         sync: false
       - key: SPOTIFY_CLIENT_SECRET
         sync: false
+      - key: LAVALINK_HOST
+        sync: false
+      - key: LAVALINK_PASSWORD
+        sync: false
+      - key: LAVALINK_PORT
+        value: "443"
+      - key: LAVALINK_SECURE
+        value: "true"
       - key: PORT
-        value: 10000
-    healthCheckPath: /
+        value: "10000"
