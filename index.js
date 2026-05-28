@@ -23,13 +23,69 @@ function cleanEnv(value) {
   return value.trim().replace(/^['"]|['"]$/g, '').replace(/^host\s*:\s*/i, '').trim();
 }
 
-function getLavalinkNodes() {
+async function checkSSLCertificate(host, port) {
+  return new Promise((resolve) => {
+    const https = require('https');
+    const options = {
+      host: host.replace(/^https?:\/\//, ''),
+      port: port,
+      method: 'HEAD',
+      rejectUnauthorized: true, // Strict SSL validation
+      timeout: 5000
+    };
+
+    const req = https.request(options, (res) => {
+      const cert = res.socket.getPeerCertificate();
+      if (cert && cert.valid_to) {
+        const expiryDate = new Date(cert.valid_to);
+        const now = new Date();
+        const isValid = expiryDate > now;
+        
+        if (!isValid) {
+          console.warn(`⚠️  SSL certificate for ${host} expired on ${expiryDate.toDateString()}`);
+        }
+        
+        resolve(isValid);
+      } else {
+        resolve(true); // Assume valid if we can't check
+      }
+    });
+
+    req.on('error', (err) => {
+      if (err.code === 'CERT_HAS_EXPIRED' || err.message.includes('certificate')) {
+        console.warn(`⚠️  SSL certificate error for ${host}: ${err.message}`);
+        resolve(false);
+      } else {
+        resolve(true); // Other errors, assume SSL is not the issue
+      }
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(true); // Timeout, assume valid
+    });
+
+    req.end();
+  });
+}
+
+async function getLavalinkNodes() {
   const host = cleanEnv(process.env.LAVALINK_HOST);
   const password = cleanEnv(process.env.LAVALINK_PASSWORD);
   if (!host || !password) return [];
 
-  const secure = process.env.LAVALINK_SECURE !== 'false';
+  let secure = process.env.LAVALINK_SECURE !== 'false';
   const port = cleanEnv(process.env.LAVALINK_PORT) || (secure ? '443' : '2333');
+
+  // Auto-detect SSL certificate validity if secure is enabled
+  if (secure) {
+    const isSSLValid = await checkSSLCertificate(host, port);
+    if (!isSSLValid) {
+      console.warn('⚠️  Falling back to insecure connection due to SSL certificate issues');
+      secure = false;
+    }
+  }
+
   return [{
     name: 'main',
     url: `${host}:${port}`,
@@ -38,24 +94,26 @@ function getLavalinkNodes() {
   }];
 }
 
-const lavalinkNodes = getLavalinkNodes();
-if (!lavalinkNodes.length) {
-  console.error(
-    '❌ Missing LAVALINK_HOST and LAVALINK_PASSWORD.',
-    'Add them in Render → Environment (see README for free Lavalink nodes).'
-  );
-} else {
-  client.shoukaku = new Shoukaku(new Connectors.DiscordJS(client), lavalinkNodes, {
-    moveOnDisconnect: false,
-    resume: false,
-    reconnectTries: 5,
-    reconnectInterval: 5000,
-  });
+(async () => {
+  const lavalinkNodes = await getLavalinkNodes();
+  if (!lavalinkNodes.length) {
+    console.error(
+      '❌ Missing LAVALINK_HOST and LAVALINK_PASSWORD.',
+      'Add them in Render → Environment (see README for free Lavalink nodes).'
+    );
+  } else {
+    client.shoukaku = new Shoukaku(new Connectors.DiscordJS(client), lavalinkNodes, {
+      moveOnDisconnect: false,
+      resume: false,
+      reconnectTries: 5,
+      reconnectInterval: 5000,
+    });
 
-  client.shoukaku.on('ready', name => console.log(`✅ Lavalink node "${name}" connected`));
-  client.shoukaku.on('error', (name, err) => console.error(`Lavalink "${name}" error:`, err?.message || err));
-  client.shoukaku.on('close', (name, code, reason) => console.warn(`Lavalink "${name}" closed (${code}):`, reason));
-}
+    client.shoukaku.on('ready', name => console.log(`✅ Lavalink node "${name}" connected`));
+    client.shoukaku.on('error', (name, err) => console.error(`Lavalink "${name}" error:`, err?.message || err));
+    client.shoukaku.on('close', (name, code, reason) => console.warn(`Lavalink "${name}" closed (${code}):`, reason));
+  }
+})();
 
 client.commands = new Collection();
 client.queues = new Map();
