@@ -314,8 +314,10 @@ class MusicQueue {
       this.tracks.push(...newTracks);
     }
 
-    const playing = this.lavalinkPlayer?.playing;
-    if (!playing && !this.paused) {
+    // Check if something is currently playing
+    const isPlaying = this.lavalinkPlayer?.track && !this.paused;
+    
+    if (!isPlaying) {
       await this.play();
     } else {
       await this._updatePanel();
