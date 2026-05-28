@@ -237,48 +237,23 @@ class MusicQueue {
   }
 
   async _resolveSpotify(url, requester) {
-    await ensureSpotifyToken();
-
+    // Free Spotify scraping - no API or Premium required!
     const normalized = normalizeSpotifyUrl(url);
     const tracks = [];
 
     try {
       if (normalized.includes('/track/')) {
         const id = normalized.split('/track/')[1].split('/')[0];
-        const { body: t } = await spotifyApi.getTrack(id);
-        const artist = t.artists.map(a => a.name).join(', ');
-        const track = await this._resolveYoutubeSearch(artist, t.name, requester, t.album?.images?.[0]?.url || '');
+        const trackInfo = await this._scrapeSpotifyTrack(id);
+        const track = await this._resolveYoutubeSearch(trackInfo.artist, trackInfo.title, requester, trackInfo.thumbnail);
         if (track) tracks.push(track);
-      } else if (normalized.includes('/playlist/')) {
-        const id = normalized.split('/playlist/')[1].split('/')[0];
-        const { body } = await spotifyApi.getPlaylistTracks(id, { limit: 50 });
-        const items = body.items.filter(i => i.track).map(i => ({
-          artist: i.track.artists.map(a => a.name).join(', '),
-          title: i.track.name,
-          thumbnail: i.track.album?.images?.[0]?.url || '',
-        }));
-        const resolved = await mapLimit(items, 4, item =>
-          this._resolveYoutubeSearch(item.artist, item.title, requester, item.thumbnail).catch(() => null)
-        );
-        tracks.push(...resolved.filter(Boolean));
-      } else if (normalized.includes('/album/')) {
-        const id = normalized.split('/album/')[1].split('/')[0];
-        const [{ body: album }, { body: albumTracks }] = await Promise.all([
-          spotifyApi.getAlbum(id),
-          spotifyApi.getAlbumTracks(id, { limit: 50 }),
-        ]);
-        const artist = album.artists.map(a => a.name).join(', ');
-        const thumb = album.images?.[0]?.url || '';
-        const items = albumTracks.items.map(t => ({ artist, title: t.name, thumbnail: thumb }));
-        const resolved = await mapLimit(items, 4, item =>
-          this._resolveYoutubeSearch(item.artist, item.title, requester, item.thumbnail).catch(() => null)
-        );
-        tracks.push(...resolved.filter(Boolean));
+      } else if (normalized.includes('/playlist/') || normalized.includes('/album/')) {
+        throw new Error('Spotify playlists and albums are not supported without Premium. Please use individual track links or YouTube playlists.');
       } else {
-        throw new Error('Unsupported Spotify link. Use a track, playlist, or album URL.');
+        throw new Error('Unsupported Spotify link. Use a track URL.');
       }
     } catch (e) {
-      if (e.message?.includes('not configured') || e.message?.includes('Unsupported')) throw e;
+      if (e.message?.includes('not supported') || e.message?.includes('Unsupported')) throw e;
       throw new Error(`Spotify error: ${formatError(e)}`);
     }
 
@@ -286,6 +261,58 @@ class MusicQueue {
       throw new Error('Could not find YouTube matches for that Spotify link. Try a direct YouTube URL or song name.');
     }
     return tracks;
+  }
+
+  async _scrapeSpotifyTrack(trackId) {
+    // Scrape Spotify's public embed page (no auth required)
+    const https = require('https');
+    
+    return new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'open.spotify.com',
+        path: `/embed/track/${trackId}`,
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      };
+
+      https.get(options, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            // Extract track info from HTML
+            const titleMatch = data.match(/<title>([^<]+)<\/title>/);
+            if (!titleMatch) {
+              reject(new Error('Could not extract track info from Spotify'));
+              return;
+            }
+
+            const fullTitle = titleMatch[1].replace(' - song and lyrics by ', '|').replace(' | Spotify', '');
+            const parts = fullTitle.split('|');
+            
+            if (parts.length < 2) {
+              reject(new Error('Could not parse Spotify track info'));
+              return;
+            }
+
+            const title = parts[0].trim();
+            const artist = parts[1].trim();
+
+            // Try to extract thumbnail
+            const thumbnailMatch = data.match(/<meta property="og:image" content="([^"]+)"/);
+            const thumbnail = thumbnailMatch ? thumbnailMatch[1] : '';
+
+            resolve({ title, artist, thumbnail });
+          } catch (err) {
+            reject(new Error('Failed to parse Spotify page'));
+          }
+        });
+      }).on('error', (err) => {
+        reject(new Error('Failed to fetch Spotify track info'));
+      });
+    });
   }
 
   async addTracks(newTracks, insertNext = false) {

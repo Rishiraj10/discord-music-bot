@@ -8,7 +8,7 @@ module.exports = {
     .setDescription('Play a song or playlist from YouTube or Spotify')
     .addStringOption(opt =>
       opt.setName('query')
-        .setDescription('Song name, YouTube URL, or Spotify URL')
+        .setDescription('Song name, YouTube URL, or Spotify track URL')
         .setRequired(true)
     )
     .addBooleanOption(opt =>
