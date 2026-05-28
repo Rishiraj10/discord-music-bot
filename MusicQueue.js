@@ -17,8 +17,24 @@ function formatError(e) {
   if (body?.error?.message) return body.error.message;
   if (body?.error_description) return body.error_description;
   if (body?.message) return body.message;
+  
+  // Handle statusCode errors
+  if (e.statusCode) {
+    const statusMessages = {
+      400: 'Bad request to Spotify API',
+      401: 'Spotify authentication failed - check credentials',
+      403: 'Spotify access forbidden',
+      404: 'Spotify content not found',
+      429: 'Spotify rate limit exceeded',
+      500: 'Spotify server error',
+      503: 'Spotify service unavailable'
+    };
+    return statusMessages[e.statusCode] || `Spotify API error (${e.statusCode})`;
+  }
+  
   try {
     const raw = JSON.stringify(body ?? e);
+    if (raw === '{}') return 'Spotify API connection failed - check credentials';
     return raw.length > 180 ? `${raw.slice(0, 180)}…` : raw;
   } catch {
     return 'Request failed';
@@ -35,6 +51,10 @@ async function ensureSpotifyToken() {
       .then(data => {
         spotifyApi.setAccessToken(data.body.access_token);
         setTimeout(refreshSpotifyToken, (data.body.expires_in - 60) * 1000);
+      })
+      .catch(err => {
+        console.error('Spotify token generation failed:', formatError(err));
+        throw new Error(`Spotify authentication failed: ${formatError(err)}`);
       })
       .finally(() => { spotifyTokenPromise = null; });
   }
