@@ -102,13 +102,27 @@ function progressBar(current, total, length = 15) {
 }
 
 function savePlaylists(client) {
-  const fs = require('fs');
-  const obj = {};
+  const { saveUserPlaylists } = require('./supabase');
+  
+  // Save each user's playlists to Supabase
   for (const [userId, playlists] of client.playlists.entries()) {
-    obj[userId] = playlists;
+    saveUserPlaylists(userId, playlists).catch(err => {
+      console.error(`Failed to save playlists for user ${userId}:`, err.message);
+    });
   }
-  fs.mkdirSync('./data', { recursive: true });
-  fs.writeFileSync('./data/playlists.json', JSON.stringify(obj, null, 2));
+  
+  // Also save to local file as backup (if filesystem persists)
+  try {
+    const fs = require('fs');
+    const obj = {};
+    for (const [userId, playlists] of client.playlists.entries()) {
+      obj[userId] = playlists;
+    }
+    fs.mkdirSync('./data', { recursive: true });
+    fs.writeFileSync('./data/playlists.json', JSON.stringify(obj, null, 2));
+  } catch (err) {
+    // Ignore file system errors on ephemeral storage
+  }
 }
 
 module.exports = { getOrCreateQueue, nowPlayingEmbed, queueEmbed, savePlaylists };

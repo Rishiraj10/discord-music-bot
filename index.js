@@ -64,13 +64,31 @@ client.commands = new Collection();
 client.queues = new Map();
 client.playlists = new Map();
 
-const PLAYLIST_FILE = './data/playlists.json';
-if (fs.existsSync(PLAYLIST_FILE)) {
-  const data = JSON.parse(fs.readFileSync(PLAYLIST_FILE, 'utf8'));
-  for (const [userId, playlists] of Object.entries(data)) {
-    client.playlists.set(userId, playlists);
+// Load playlists from Supabase (async, happens in background)
+(async () => {
+  const { loadPlaylists } = require('./utils/supabase');
+  const playlists = await loadPlaylists();
+  
+  for (const [userId, userPlaylists] of Object.entries(playlists)) {
+    client.playlists.set(userId, userPlaylists);
   }
-}
+  
+  // Fallback: Try loading from local file if Supabase fails
+  if (Object.keys(playlists).length === 0) {
+    const PLAYLIST_FILE = './data/playlists.json';
+    if (fs.existsSync(PLAYLIST_FILE)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(PLAYLIST_FILE, 'utf8'));
+        for (const [userId, userPlaylists] of Object.entries(data)) {
+          client.playlists.set(userId, userPlaylists);
+        }
+        console.log('✅ Loaded playlists from local file (fallback)');
+      } catch (err) {
+        console.error('Failed to load local playlists:', err.message);
+      }
+    }
+  }
+})();
 
 const commandsPath = path.join(__dirname, 'commands');
 const commandFiles = fs.readdirSync(commandsPath).filter(f => f.endsWith('.js') && !f.startsWith('_'));
