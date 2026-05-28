@@ -50,8 +50,6 @@ module.exports = {
           .addFields({ name: 'First Track', value: tracks[0].title });
         await interaction.editReply({ embeds: [embed] });
       }
-
-      await updatePlayerPanel(queue, client);
     } catch (e) {
       await interaction.editReply(`❌ Error: ${e.message}`);
     }
