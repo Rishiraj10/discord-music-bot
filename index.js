@@ -1,9 +1,6 @@
 process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
 process.on('unhandledRejection', err => console.error('Unhandled Rejection:', err));
 
-// Disable SSL certificate validation (for expired Lavalink certificates)
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
 const { Client, GatewayIntentBits, Collection, ActivityType } = require('discord.js');
 const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v10');
