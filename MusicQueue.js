@@ -264,49 +264,41 @@ class MusicQueue {
   }
 
   async _scrapeSpotifyTrack(trackId) {
-    // Scrape Spotify's public embed page (no auth required)
+    // Use Spotify's oEmbed API (public, no auth required)
     const https = require('https');
     
     return new Promise((resolve, reject) => {
-      const options = {
-        hostname: 'open.spotify.com',
-        path: `/embed/track/${trackId}`,
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      };
-
-      https.get(options, (res) => {
+      const url = `https://open.spotify.com/oembed?url=https://open.spotify.com/track/${trackId}`;
+      
+      https.get(url, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           try {
-            // Extract track info from HTML
-            const titleMatch = data.match(/<title>([^<]+)<\/title>/);
-            if (!titleMatch) {
+            const json = JSON.parse(data);
+            
+            if (!json.title) {
               reject(new Error('Could not extract track info from Spotify'));
               return;
             }
 
-            const fullTitle = titleMatch[1].replace(' - song and lyrics by ', '|').replace(' | Spotify', '');
-            const parts = fullTitle.split('|');
+            // oEmbed title format is usually "Song Name" or "Song Name by Artist"
+            let title = json.title;
+            let artist = json.provider_name || 'Unknown Artist';
             
-            if (parts.length < 2) {
-              reject(new Error('Could not parse Spotify track info'));
-              return;
+            // Try to extract artist from title if it contains "by"
+            if (title.includes(' by ')) {
+              const parts = title.split(' by ');
+              title = parts[0].trim();
+              artist = parts[1].trim();
             }
-
-            const title = parts[0].trim();
-            const artist = parts[1].trim();
-
-            // Try to extract thumbnail
-            const thumbnailMatch = data.match(/<meta property="og:image" content="([^"]+)"/);
-            const thumbnail = thumbnailMatch ? thumbnailMatch[1] : '';
+            
+            // Get thumbnail from oEmbed
+            const thumbnail = json.thumbnail_url || '';
 
             resolve({ title, artist, thumbnail });
           } catch (err) {
-            reject(new Error('Failed to parse Spotify page'));
+            reject(new Error('Failed to parse Spotify oEmbed data'));
           }
         });
       }).on('error', (err) => {
